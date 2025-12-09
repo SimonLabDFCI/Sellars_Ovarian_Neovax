@@ -9,12 +9,15 @@ Adjuvant personalized cancer vaccines (PCV) targeting neoantigens are of increas
 # Contents 
 
 This repository contains all code to reproduce figures related to analyses of Bulk TCR data associated with Sellars, et al
+Included and linked here are book rendered via Quarto.
 
-Included and linked here are book rendered via Quarto, one for each stage of the analysis:
+Analysis of bulk TCR clonotypes in longitudinal and vaccine pool stimulated PBMC samples available [here](https://simonlabdfci.github.io/Sellars_Ovarian_Neovax/Ovarian_PBMC_BulkTCR_book/)
 
-Analysis of bulk TCR clonotypes in longitudinal and vaccine pool stimulated PBMC samples available here
+Additionally, source quarto markdown documents (*.qmd) are supplied here under subdirectory: https://github.com/SimonLabDFCI/Sellars_Ovarian_Neovax/Ovarian_PBMC_BulkTCR_book/source
 
-Additionally, source quarto markdown documents (*.qmd) are supplied here under subdirectory
+# Note
+
+Visualization codes have been modified so that the figures fit in the Rstudio panels. Minor differences may arise in the color, font and formatting of the figures. 
 
 
 
