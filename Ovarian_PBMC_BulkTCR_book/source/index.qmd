@@ -1,0 +1,11 @@
+# Introduction {.unnumbered}
+
+This is a book that contains all code to reproduce figures related to bulkTCRseq analysis of PBMC data associated with Sellars, et al (2026)
+
+The code is identical to the code utilized to generate final figures for the manuscript. Small differences may arise in style and formatting of the visualization.
+
+## Immune selective pressure by personal neoantigen vaccines shapes response in high-grade serous ovarian cancer {.unnumbered}
+MacLean C. Sellars, Jessica Frank, Bohoon Shim, Allison Vanasse, Cleo Forman, Chloe R. Tu, Kyle Tabata, Haley E. Sax, Kan Xiong, Catherine Song, Ruolin Liu, Vipheaviny Chea, Wesley Lu, Micah Rickles-Young, Amit Sud, Oriol Olive, Haley Greenslade, Carrie Cibulskis, Nir Hacohen, Sarah Hill, Shuqiang Li, Kenneth J. Livak, Edward F. Fritsch, Rebecca Porter, Carolyn Krasner, Elizabeth Stover Giacomo Oliveira,Viktor Adalsteinsson, Jeremy M. Simon, Patrick A. Ott, Ursula Matulonis, Derin B. Keskin,Catherine J. Wu, Panos Konstantinopoulos
+
+### Abstract {.unnumbered}
+Adjuvant personalized cancer vaccines (PCV) targeting neoantigens are of increasing interest across malignancies. Herein, we report the results of a first-in-disease phase I clinical trial testing a PCV  in women with high-grade serous ovarian cancer (HGSOC), a low mutation burden tumor (NCT04024878). ‘NeoVax’ consisted of pools of synthetic long peptides admixed with the immunostimulant polyICLC, and was combined with anti-PD1 antibody for platinum-sensitive HGSOC following standard-of-care (SOC) platinum doublet chemotherapy. Vaccines were generated successfully for all 10 treated patients, with >70% selected targets detectable by non-invasive cell-free DNA analysis despite prolonged prior exposure to SOC therapy. Clinical benefit was observed in 6 of 10 patients and was associated with broader immune responses. Multiple tumor- and vaccine-specific T cell clonotypes were detected in blood and tumor following vaccination. Importantly, tumor clones detected in resistant tumor lesions arose from diverse mechanisms, indicative of immunoselective pressure imposed by vaccine treatment. Our results reveal an interplay between the breadth of antigens presented by the tumor and resulting immunity, which may dictate clinical efficacy following vaccination.   

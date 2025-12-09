@@ -1,0 +1,781 @@
+# PBMCs: Data Visualization
+
+## Package Set Up
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(colorRamp2)
+library(ComplexHeatmap)
+library(cowplot)
+library(ggplot2)
+library(ggridges)
+library(vegan)
+library(scales)
+library(colorspace)
+
+```
+
+## Loading in dataframes
+
+```{r}
+
+PT106_test_fisher_categorized <- readRDS("./PT106_test_fisher_categorized.rds")
+PT108_test_fisher_categorized <- readRDS("./PT108_test_fisher_categorized.rds")
+PT111_test_fisher_categorized <- readRDS("./PT111_test_fisher_categorized.rds")
+PT113_test_fisher_categorized <- readRDS("./PT113_test_fisher_categorized.rds")
+PT114_test_fisher_categorized <- readRDS( "./PT114_test_fisher_categorized.rds")
+PT116_test_fisher_categorized <- readRDS("./PT116_test_fisher_categorized.rds")
+PT117_test_fisher_categorized <- readRDS("./PT117_test_fisher_categorized.rds")
+PT118_test_fisher_categorized <- readRDS("./PT118_test_fisher_categorized.rds")
+PT119_test_fisher_categorized <- readRDS("./PT119_test_fisher_categorized.rds")
+PT122_test_fisher_categorized <- readRDS("./PT122_test_fisher_categorized.rds")
+
+```
+
+## Combine Dataframe for Visualization
+
+```{r}
+fisher_clusters <- bind_rows(
+  PT122_test_fisher_categorized  %>% mutate(patient_id = "PT122"),
+  PT119_test_fisher_categorized  %>% mutate(patient_id = "PT119"),
+  PT118_test_fisher_categorized  %>% mutate(patient_id = "PT118"),
+  PT117_test_fisher_categorized  %>% mutate(patient_id = "PT117"),
+  PT116_test_fisher_categorized  %>% mutate(patient_id = "PT116"),
+  PT114_test_fisher_categorized  %>% mutate(patient_id = "PT114"),
+  PT113_test_fisher_categorized  %>% mutate(patient_id = "PT113"),
+  PT111_test_fisher_categorized  %>% mutate(patient_id = "PT111"),
+  PT108_test_fisher_categorized  %>% mutate(patient_id = "PT108"),
+  PT106_test_fisher_categorized  %>% mutate(patient_id = "PT106")
+)
+
+ex <- fisher_clusters %>% 
+  group_by(patient_id, new_category) %>%
+  summarize(count=n(), .groups = "drop")
+
+```
+
+## Plotting Proportion of Postvax Expanded and Postnivo Expanded
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# Define the relevant categories
+sig_categories <- c("post_W14(vaccine)_expanded", "post_W22(booster+Nivo)_expanded")
+
+# Filter only significant clones
+sig_clones <- fisher_clusters %>%
+  filter(new_category %in% sig_categories)
+
+# Create a new column to label as postvax or postnivo
+sig_clones <- sig_clones %>%
+  mutate(expansion_type = case_when(
+    new_category == "post_W14(vaccine)_expanded" ~ "Postvax",
+    new_category == "post_W22(booster+Nivo)_expanded" ~ "Postnivo"
+  ))
+
+# Count and calculate proportions per patient
+sig_summary <- sig_clones %>%
+  group_by(patient_id, expansion_type) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(patient_id) %>%
+  mutate(proportion = count / sum(count))
+
+# Set factor levels for patient order
+sig_summary$patient_id <- factor(
+  sig_summary$patient_id,
+  levels = c("PT106","PT108", "PT116", "PT118", "PT119", "PT122", "PT111", "PT113", "PT114", "PT117")
+)
+
+# patient groupings
+progressive <- c("PT111", "PT114", "PT117", "PT113")
+transient_response <- c("PT106", "PT108", "PT116")
+stable_disease <- c("PT118", "PT119", "PT122")
+
+# Add response column
+sig_summary <- sig_summary %>%
+  mutate(response = case_when(
+    patient_id %in% progressive ~ "Progressive",
+    patient_id %in% transient_response ~ "Transient_Response",
+    patient_id %in% stable_disease ~ "Stable_Disease",
+    TRUE ~ NA_character_  # For patients not in any group
+  ))
+
+# Define color mappings
+expansion_colors <- c("Postvax" = "#F8766D", "Postnivo" = "#87CEEB")
+response_colors <- c(
+  "Progressive" = "#E69F00",
+  "Transient_Response" = "#56B4E9",
+  "Stable_Disease" = "#009E73"
+)
+
+
+sig_summary$response <- factor(sig_summary$response, levels=c("Transient_Response", "Stable_Disease", "Progressive"))
+# Plot with response group as outline color
+ggplot(sig_summary, aes(x = patient_id, y = proportion, fill = expansion_type)) +
+  geom_bar(stat = "identity", size = 1, position = "stack") +
+  labs(
+    title = "Proportion of Significant Clones (Postvax vs Postnivo)",
+    x = "Patient ID",
+    y = "Proportion of Significant Clones",
+    fill = "Expansion Type",
+    color = "Response Group"
+  ) +
+  scale_fill_manual(values = expansion_colors) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0, 1) + facet_grid(~response, scales = "free_x", space = "free_x")
+
+
+```
+
+## Plotting Number of Postvax Expanded and Postnivo Expanded
+
+```{r, width=24, height = 20}
+
+sig_summary <- sig_summary %>% mutate(new_category = case_when(
+    expansion_type == "Postvax" ~ "Post_Vaccine_Expanded",
+    expansion_type == "Postnivo" ~ "Post_Nivo_Expanded",
+    TRUE ~ expansion_type
+  ))
+
+sig_summary$new_category <- factor(sig_summary$new_category, levels=c("Post_Vaccine_Expanded","Post_Nivo_Expanded"))
+
+sig_summary %>%
+  ggplot(aes(x = patient_id, y = count, fill = response)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +  # set dodge width
+  geom_text(aes(label = count), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5,  # move text slightly above the bar
+            size = 4) +
+  facet_wrap(~new_category, scales = "free_y") +
+  labs(
+    title = "Number of Postvaccine and Postnivo Expanded Clones",
+    x = "Patient ID",
+    y = "Clone Count",
+    fill = "Response Group"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Progressive" = "#E69F00",
+      "Transient_Response" = "#56B4E9",
+      "Stable_Disease" = "#009E73"
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+## Conducting t-test for the Number of Postvax Expanded vs Postnivo Expanded.
+
+```{r, width=24, height = 20}
+
+# Combine all patient data
+all_counts <- bind_rows(
+  PT122_test_fisher_categorized  %>% mutate(patient_id = "PT122"),
+  PT119_test_fisher_categorized  %>% mutate(patient_id = "PT119"),
+  PT118_test_fisher_categorized  %>% mutate(patient_id = "PT118"),
+  PT117_test_fisher_categorized  %>% mutate(patient_id = "PT117"),
+  PT116_test_fisher_categorized  %>% mutate(patient_id = "PT116"),
+  PT114_test_fisher_categorized  %>% mutate(patient_id = "PT114"),
+  PT113_test_fisher_categorized  %>% mutate(patient_id = "PT113"),
+  PT111_test_fisher_categorized  %>% mutate(patient_id = "PT111"),
+  PT108_test_fisher_categorized  %>% mutate(patient_id = "PT108"),
+  PT106_test_fisher_categorized  %>% mutate(patient_id = "PT106")
+)
+
+# Count clonotypes by category and patient
+# Postvax Expanded vs Postnivo Expanded across response groups
+clonotype_counts <- all_counts %>%
+  group_by(patient_id, new_category) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Only interested in postvax and postnivo comparison
+paired_data <- clonotype_counts %>%
+  filter(new_category %in% c("post_W14(vaccine)_expanded", "post_W22(booster+Nivo)_expanded")) %>%
+  pivot_wider(names_from = new_category, values_from = count) %>%
+  replace_na(list(
+    `post_W14(vaccine)_expanded` = 0,
+    `post_W22(booster+Nivo)_expanded` = 0
+  ))
+
+# Paired t-test
+t_test_result <- t.test(paired_data$`post_W14(vaccine)_expanded`,
+                        paired_data$`post_W22(booster+Nivo)_expanded`,
+                        paired = TRUE)
+
+# Reshape for plotting
+long_counts_df <- paired_data %>%
+  pivot_longer(
+    cols = c(`post_W14(vaccine)_expanded`, `post_W22(booster+Nivo)_expanded`),
+    names_to = "Condition",
+    values_to = "Significant_Clones"
+  ) %>%
+  mutate(
+    Condition = recode(Condition,
+      "post_W14(vaccine)_expanded" = "Post_W14(Vaccine)",
+      "post_W22(booster+Nivo)_expanded" = "Post_W22(Nivo)"
+    ),
+    Patient = patient_id
+  )
+
+# Annotate patient groups
+progressive <- c("PT111", "PT114", "PT117", "PT113")
+transient_response <- c("PT106", "PT108", "PT116")
+stable_disease <- c("PT118", "PT119", "PT122")
+
+long_counts_df <- long_counts_df %>%
+  mutate(response = case_when(
+    Patient %in% progressive ~ "Progressive",
+    Patient %in% transient_response ~ "Transient_Response",
+    Patient %in% stable_disease ~ "Stable_Disease",
+    TRUE ~ NA_character_
+  ))
+
+# Final Plot (faceted by response)
+ggplot(long_counts_df, aes(x = Condition, y = Significant_Clones, group = Patient)) +
+  geom_point(aes(color = Patient), size = 3, alpha = 0.6) +
+  geom_line(aes(color = Patient), size = 1, alpha = 0.6) +
+  labs(
+    title = "Paired t-test of Significant Clones",
+    subtitle = paste("Paired t-test p-value:", signif(t_test_result$p.value, 3)),
+    x = "Condition",
+    y = "Number of Significant Clones"
+  ) +
+  facet_wrap(~response, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Comparing the Number of Postvax Clone Counts Separated by Response Groups
+
+```{r, width=24, height = 20}
+
+# Filter postvax expanded clones
+postvax_counts <- clonotype_counts %>%
+  filter(new_category == "post_W14(vaccine)_expanded")
+
+# Label patients by response group
+postvax_counts <- postvax_counts %>%
+  mutate(response_group = case_when(
+    patient_id %in% progressive ~ "Progressive",
+    patient_id %in% c(transient_response, stable_disease) ~ "Non_Progressive",
+    TRUE ~ NA_character_
+  ))
+
+# Perform unpaired t-test
+unpaired_t <- t.test(count ~ response_group, data = postvax_counts)
+
+# Plot results
+ggplot(postvax_counts, aes(x = response_group, y = count, color = response_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
+  geom_jitter(width = 0.2, size = 3, alpha = 0.6) +
+  labs(
+    title = "Comparison of Postvax Expanded Clones",
+    subtitle = paste("Unpaired t-test p-value:", signif(unpaired_t$p.value, 3)),
+    x = "Response Group",
+    y = "Number of Postvax Expanded Clones"
+  ) +
+  scale_color_manual(values = c(
+    "Progressive" = "#E69F00",
+    "Non_Progressive" = "#56B4E9"
+  )) +
+  theme_minimal(base_size = 14)
+
+
+# Filter postvax expanded clones
+postvax_counts <- clonotype_counts %>%
+  filter(new_category == "post_W22(booster+Nivo)_expanded")
+
+# Label patients by response group
+postvax_counts <- postvax_counts %>%
+  mutate(response_group = case_when(
+    patient_id %in% progressive ~ "Progressive",
+    patient_id %in% c(transient_response, stable_disease) ~ "Non_Progressive",
+    TRUE ~ NA_character_
+  ))
+
+# Perform unpaired t-test
+unpaired_t <- t.test(count ~ response_group, data = postvax_counts)
+
+# Plot results
+ggplot(postvax_counts, aes(x = response_group, y = count, color = response_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
+  geom_jitter(width = 0.2, size = 3, alpha = 0.6) +
+  labs(
+    title = "Comparison of Postnivo Expanded Clones",
+    subtitle = paste("Unpaired t-test p-value:", signif(unpaired_t$p.value, 3)),
+    x = "Response Group",
+    y = "Number of Postvax Expanded Clones"
+  ) +
+  scale_color_manual(values = c(
+    "Progressive" = "#E69F00",
+    "Non_Progressive" = "#56B4E9"
+  )) +
+  theme_minimal(base_size = 14)
+```
+
+## Heatmap to Show Difference Between Postnivo - Postvaccine Frequencies (among postvaccine expanded clones)
+
+```{r, fig.height=20, fig.width=20}
+
+# color definition function 
+col_fun <- colorRamp2(
+  breaks = c(-0.01, 0, 0.01),
+  colors = c("blue", "white", "red")
+)
+
+make_heatmap <- function(df, patient_id) {
+  temp <- df[df$new_category == "post_W14(vaccine)_expanded", ]
+  temp <- temp[order(-temp$Postvaccine_umi_fraction), ]
+  # difference in umi_fraction (Postnivo - Postvaccine)
+  temp$diff <- temp$Postnivo_umi_fraction - temp$Postvaccine_umi_fraction
+  temp <- temp[order(-temp$diff), ]
+  mat <- matrix(temp$diff)
+  colnames(mat) <- paste0("Patient:", patient_id)
+  Heatmap(mat, cluster_rows = FALSE, cluster_columns = FALSE, show_row_names = FALSE,col=col_fun, heatmap_legend_param = list(title = "Nivo-Vax"))
+}
+
+# Create heatmaps for each patient
+p1 <- make_heatmap(PT108_test_fisher_categorized, 108)
+p2 <- make_heatmap(PT116_test_fisher_categorized, 116)
+p3 <- make_heatmap(PT113_test_fisher_categorized, 113)
+p4 <- make_heatmap(PT114_test_fisher_categorized, 114)
+p5 <- make_heatmap(PT117_test_fisher_categorized, 117)
+p6 <- make_heatmap(PT118_test_fisher_categorized, 118)
+p7 <- make_heatmap(PT119_test_fisher_categorized, 119)
+p8 <- make_heatmap(PT122_test_fisher_categorized, 122)
+
+p1_grid <- grid.grabExpr(draw(p1))
+p2_grid <- grid.grabExpr(draw(p2))
+p3_grid <- grid.grabExpr(draw(p3))
+p4_grid <- grid.grabExpr(draw(p4))
+p5_grid <- grid.grabExpr(draw(p5))
+p6_grid <- grid.grabExpr(draw(p6))
+p7_grid <- grid.grabExpr(draw(p7))
+p8_grid <- grid.grabExpr(draw(p8))
+
+plot_grid(p1_grid, p2_grid, p3_grid, p4_grid,p5_grid,p6_grid,p7_grid,p8_grid, ncol=8)
+
+```
+
+## Plotting Frequency of individual clones
+
+```{r}
+draw_lod_line <- function(yinter) {
+  indiv_lod_line <- geom_hline(yintercept = yinter, linetype = "dashed", color = "red")
+  return(indiv_lod_line)
+}
+
+plot_frequency <- function(input_df, timepoint_order, p_id) {
+  # Long format for plotting
+  input_df_pivot <- input_df %>%
+    dplyr::select(clonotype_id, contains("umi_fraction")) %>%
+    tidyr::pivot_longer(
+      cols = dplyr::contains("umi_fraction"),
+      names_to = "Timepoint",
+      values_to = "UMI_Fraction"
+    )
+  
+  input_df_pivot$Timepoint <- factor(input_df_pivot$Timepoint, levels = timepoint_order)
+  input_df_pivot$UMI_Fraction <- input_df_pivot$UMI_Fraction
+  input_df_plot_data <- input_df_pivot %>%
+    left_join(input_df %>% dplyr::select(clonotype_id, new_category), by = "clonotype_id")
+  
+  # Count clonotypes per category
+  clone_counts <- input_df %>%
+    count(new_category) %>%
+    deframe()  # turns into a named vector
+  
+  # Create legend labels with counts
+  legend_labels <- c(
+    "non_expanded" = paste0("non_expanded (n=", clone_counts["non_expanded"], ")"),
+    "post_W14(vaccine)_expanded" = paste0("post_W14(vaccine)_expanded (n=", clone_counts["post_W14(vaccine)_expanded"], ")"),
+    "post_W22(booster+Nivo)_expanded" = paste0("post_W22(booster+Nivo)_expanded (n=", clone_counts["post_W22(booster+Nivo)_expanded"], ")")
+  )
+  
+  # Plot
+  p1 <- ggplot(input_df_plot_data, aes(x = Timepoint, y = UMI_Fraction, group = clonotype_id, color = new_category)) +
+    geom_line(data = input_df_plot_data %>% filter(new_category == "non_expanded"), 
+              aes(color = "non_expanded"), size = 1, alpha = 0.5) +
+    geom_line(data = input_df_plot_data %>% filter(new_category == "post_W14(vaccine)_expanded"), 
+              aes(color = "post_W14(vaccine)_expanded"), size = 1, alpha = 0.5) +
+    geom_line(data = input_df_plot_data %>% filter(new_category == "post_W22(booster+Nivo)_expanded"), 
+              aes(color = "post_W22(booster+Nivo)_expanded"), size = 1, alpha = 0.5) +
+    scale_color_manual(
+      values = c(
+        "non_expanded" = "grey90",
+        "post_W14(vaccine)_expanded" = "darkgoldenrod3",
+        "post_W22(booster+Nivo)_expanded" = "#0072B2"
+      ),
+      labels = legend_labels
+    ) +
+    labs(title = paste("Clonotype UMI Fraction Across Timepoints", p_id),
+         x = "Timepoint",
+         y = "UMI Fraction",
+         color = "Clone Category") +
+    annotation_logticks(sides = "l") +
+    draw_lod_line(input_df$visualization_LOD[1]) +
+    annotate("text", x = as.numeric(length(timepoint_order)) + 0.25,
+             y = input_df$visualization_LOD[1]*2, label = "LOD", size = 4, color = "red") +
+    theme_classic(base_size = 15) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+      axis.text.y = element_text(size = 8),
+      axis.title.x = element_text(size = 8, face = "bold"),
+      axis.title.y = element_text(size = 8, face = "bold"),
+      legend.text = element_text(size = 8),
+      legend.title = element_text(size = 8, face = "bold"),
+      plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+      plot.margin = margin(5, 60, 5, 5)
+    ) +
+    scale_y_log10(labels = label_number(accuracy = 0.00001)) + 
+    guides(color = guide_legend(override.aes = list(size = 5, alpha = 1)))
+
+  return(p1)
+}
+```
+
+## Plotting Line Frequency Plots For Each Patient 
+
+```{r, fig.height=20, fig.width=20}
+PT106_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "w16_umi_fraction")
+PT106_freq <- plot_frequency(PT106_test_fisher_categorized, PT106_timepoint_order, "(PT106)")
+
+PT108_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction", "w40_umi_fraction")
+PT108_freq <- plot_frequency(PT108_test_fisher_categorized, PT108_timepoint_order, "(PT108)")
+
+PT111_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction")
+PT111_freq <- plot_frequency(PT111_test_fisher_categorized, PT111_timepoint_order, "(PT111)")
+
+PT113_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT113_freq <- plot_frequency(PT113_test_fisher_categorized, PT113_timepoint_order, "(PT113)")
+
+PT114_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT114_freq <- plot_frequency(PT114_test_fisher_categorized, PT114_timepoint_order, "(PT114)")
+
+PT116_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction", "w40_umi_fraction")
+PT116_freq <- plot_frequency(PT116_test_fisher_categorized, PT116_timepoint_order, "(PT116)")
+
+PT117_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT117_freq <- plot_frequency(PT117_test_fisher_categorized, PT117_timepoint_order, "(PT117)")
+
+PT118_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT118_freq <- plot_frequency(PT118_test_fisher_categorized, PT118_timepoint_order, "(PT118)")
+
+PT119_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT119_freq <- plot_frequency(PT119_test_fisher_categorized, PT119_timepoint_order, "(PT119)")
+
+PT122_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+PT122_freq <- plot_frequency(PT122_test_fisher_categorized, PT122_timepoint_order, "(PT122)")
+```
+
+## Plotting Line Plots, Groupping Each Response Groups
+
+```{r, width=20, height=20}
+# Create plot grids
+#grid1 <- plot_grid(PT111_freq, PT113_freq, PT114_freq, PT117_freq, ncol = 2)
+#grid2 <- plot_grid(PT118_freq, PT119_freq, PT122_freq, ncol = 2)
+#grid3 <- plot_grid(PT106_freq,PT108_freq, PT116_freq, ncol=3)
+
+PT111_freq
+PT113_freq
+PT114_freq
+PT117_freq
+```
+
+
+```{r, width=40, height=40}
+PT118_freq
+PT119_freq
+PT122_freq
+```
+
+
+```{r, width=40, height=40}
+PT106_freq
+PT108_freq
+PT116_freq
+```
+
+## Plotting Frequency Mean of each Clone Category
+
+```{r}
+
+
+#if there is LATE timepoint, add to the plot as well.
+plot_frequency_mean <- function(input_df, timepoint_order,p_id) {
+  
+  input_df_vis <- input_df
+  
+  # Add new subcategories for Post_Nivo_Expanded
+input_df_vis <- input_df_vis %>%
+  mutate(PostVaccine_UMI = Postvaccine_umi,  # Adjust to match your actual column name
+         new_category = case_when(
+           new_category == "post_W14(vaccine)_expanded" ~ "Post_Vaccine_Expanded",
+           new_category == "post_W22(booster+Nivo)_expanded" ~ "Post_Nivo_Expanded"
+         ))
+
+# Update factor levels for consistent plotting
+input_df_vis$new_category <- factor(input_df_vis$new_category,
+                                        levels = c("Post_Vaccine_Expanded",                                           "Post_Nivo_Expanded"))
+  input_df_long <- input_df_vis %>%
+    dplyr::select(clonotype_id, contains("umi_fraction")) %>%
+    tidyr::pivot_longer(
+      cols = dplyr::contains("umi_fraction"),
+      names_to = "Timepoint",
+      values_to = "UMI_Fraction"
+    )
+  
+  input_df_long$Timepoint <- factor(input_df_long$Timepoint, levels = timepoint_order)
+  input_df_long$UMI_Fraction <- (input_df_long$UMI_Fraction)
+  
+  input_df_plot_data <- input_df_long %>%
+    left_join(input_df_vis %>% dplyr::select(clonotype_id,response,new_category), by = "clonotype_id")
+  
+summary_data <- input_df_plot_data %>%
+  filter(new_category %in% c("Post_Vaccine_Expanded", "Post_Nivo_Expanded")) %>%
+  group_by(new_category, Timepoint) %>%
+  summarise(
+    mean_UMI = mean(UMI_Fraction, na.rm = TRUE),
+    se_UMI = sd(UMI_Fraction, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+)
+
+# Plot with geom_ribbon and geom_line for mean ± SE
+p1 <- ggplot(summary_data, aes(x = Timepoint, y = mean_UMI, color = new_category, group = new_category, fill = new_category)) +
+  geom_ribbon(aes(ymin = mean_UMI - se_UMI, ymax = mean_UMI + se_UMI), alpha = 0.3, color = NA) +
+  geom_line(size = 1) +
+  labs(title = paste("Clusters -", p_id),
+       x = "Timepoint", y = "Mean UMI Fraction") +
+  annotation_logticks(sides = "l") +
+  draw_lod_line(input_df_vis$visualization_LOD[1]) +
+  annotate("text", x = as.numeric(length(timepoint_order)) + 0.25,
+           y = input_df_vis$visualization_LOD[1]*2, 
+           label = "LOD", size = 4, color = "red") +
+  theme_classic() +
+  scale_y_log10(limits = c(0.0001, 0.1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("Post_Vaccine_Expanded" = "lightblue", "Post_Nivo_Expanded" = "salmon")) +
+  scale_color_manual(values = c("Post_Vaccine_Expanded" = "blue", "Post_Nivo_Expanded" = "red"))
+return(p1)
+}
+```
+
+## Plotting Mean Frequency Plots for each Patient
+
+```{r}
+two_timepoint_order <- c("Prevaccine_umis_fraction", "Postvaccine_umi_fraction")
+p9 <- plot_frequency_mean( PT106_test_fisher_categorized, two_timepoint_order, "PT106")
+p10 <- plot_frequency_mean(PT111_test_fisher_categorized, two_timepoint_order, "PT111")
+
+three_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction")
+p3 <- plot_frequency_mean( PT122_test_fisher_categorized, three_timepoint_order, "PT122")
+p4 <- plot_frequency_mean(PT119_test_fisher_categorized, three_timepoint_order, "PT119")
+p5 <- plot_frequency_mean(PT118_test_fisher_categorized, three_timepoint_order, "PT118")
+
+
+four_timepoint_order <- c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction", "w40_umi_fraction")
+p1 <- plot_frequency_mean( PT108_test_fisher_categorized, four_timepoint_order, "PT108")
+p2 <- plot_frequency_mean(PT116_test_fisher_categorized, four_timepoint_order, "PT116")
+
+p6 <- plot_frequency_mean(PT113_test_fisher_categorized, three_timepoint_order, "PT113")
+p7 <- plot_frequency_mean(PT114_test_fisher_categorized, three_timepoint_order, "PT114")
+p8 <- plot_frequency_mean(PT117_test_fisher_categorized, three_timepoint_order, "PT117")
+```
+
+## Plotting Shannon Diversity for each Patient
+
+```{r}
+
+#Load in unfiltered dataframe -> consider all clones for diversity calculation
+
+PT106_merged_df <- readRDS("./PT106_merged_df.rds")
+PT108_merged_df <- readRDS("./PT108_merged_df.rds")
+PT111_merged_df <- readRDS("./PT111_merged_df.rds")
+PT113_merged_df <- readRDS("./PT113_merged_df.rds")
+PT114_merged_df <- readRDS( "./PT114_merged_df.rds")
+PT116_merged_df <- readRDS("./PT116_merged_df.rds")
+PT117_merged_df <- readRDS("./PT117_merged_df.rds")
+PT118_merged_df <- readRDS("./PT118_merged_df.rds")
+PT119_merged_df <- readRDS("./PT119_merged_df.rds")
+PT122_merged_df <- readRDS("./PT122_merged_df.rds")
+
+calculate_diversity <- function(data_list, patient_name) {
+  results <- data.frame()
+  
+  for (timepoint in names(data_list)) {
+    umi_vector <- data_list[[timepoint]]
+    if (length(umi_vector) > 1 && sum(umi_vector) > 0) {
+      diversity_val <- diversity(umi_vector, index = "shannon") / log10(length(umi_vector))
+    } else {
+      diversity_val <- NA
+    }
+    results <- rbind(results, data.frame(
+      Patient = patient_name,
+      Timepoint = timepoint,
+      Normalized_Shannon = diversity_val
+    ))
+  }
+  return(results)
+}
+
+# Define timepoint lists for each patient
+PT106_list <- list(
+  Prevaccine_umi = PT106_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT106_merged_df$Postvaccine_umi,
+  w16_umi = PT106_merged_df$w16_umi
+)
+
+PT108_list <- list(
+  Prevaccine_umi = PT108_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT108_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT108_merged_df$Postnivo_umi,
+  w40_umi = PT108_merged_df$w40_umi
+)
+
+PT111_list <- list(
+  Prevaccine_umi = PT111_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT111_merged_df$Postvaccine_umi
+)
+
+PT113_list <- list(
+  Prevaccine_umi = PT113_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT113_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT113_merged_df$Postnivo_umi
+)
+
+PT114_list <- list(
+  Prevaccine_umi = PT114_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT114_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT114_merged_df$Postnivo_umi
+)
+
+PT116_list <- list(
+  Prevaccine_umi = PT116_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT116_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT116_merged_df$Postnivo_umi,
+  w40_umi = PT116_merged_df$w40_umi
+)
+
+PT117_list <- list(
+  Prevaccine_umi = PT117_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT117_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT117_merged_df$Postnivo_umi
+)
+
+PT118_list <- list(
+  Prevaccine_umi = PT118_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT118_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT118_merged_df$Postnivo_umi
+)
+
+PT119_list <- list(
+  Prevaccine_umi = PT119_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT119_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT119_merged_df$Postnivo_umi
+)
+
+PT122_list <- list(
+  Prevaccine_umi = PT122_merged_df$Prevaccine_umi,
+  Postvaccine_umi = PT122_merged_df$Postvaccine_umi,
+  Postnivo_umi = PT122_merged_df$Postnivo_umi
+)
+
+# Apply to all patients
+all_diversity <- rbind(
+  calculate_diversity(PT106_list, "PT106"),
+  calculate_diversity(PT108_list, "PT108"),
+  calculate_diversity(PT111_list, "PT111"),
+  calculate_diversity(PT113_list, "PT113"),
+  calculate_diversity(PT114_list, "PT114"),
+  calculate_diversity(PT116_list, "PT116"),
+  calculate_diversity(PT117_list, "PT117"),
+  calculate_diversity(PT118_list, "PT118"),
+  calculate_diversity(PT119_list, "PT119"),
+  calculate_diversity(PT122_list, "PT122")
+)
+
+
+```
+
+## Assign Response Groups to Diversity Object and Plot
+
+```{r}
+# Base colors for each response group
+base_colors <- c(
+  "Progressive" = "#E69F00",
+  "Transient_Response" = "#56B4E9",
+  "Stable_Disease" = "#009E73"
+)
+
+# Define patients per group
+progressive <- c("PT111", "PT114", "PT117", "PT113")
+transient_response <- c("PT106", "PT108", "PT116")
+stable_disease <- c("PT118", "PT119", "PT122")
+
+# Function to generate shades for a vector of patients
+generate_shades <- function(patients, base_color) {
+  n <- length(patients)
+  pal <- scales::gradient_n_pal(c(lighten(base_color, 0.3), base_color, darken(base_color, 0.3)))
+  shades <- pal(seq(0, 1, length.out = n))
+  names(shades) <- patients
+  return(shades)
+}
+
+# Generate color mapping
+patient_colors <- c(
+  generate_shades(progressive, base_colors["Progressive"]),
+  generate_shades(transient_response, base_colors["Transient_Response"]),
+  generate_shades(stable_disease, base_colors["Stable_Disease"])
+)
+
+# Example: assign patient colors to the dataframe
+all_diversity <- all_diversity %>%
+  mutate(patient_color = patient_colors[Patient])
+
+# Add response column
+all_diversity <- all_diversity %>%
+  mutate(response = case_when(
+    Patient %in% progressive ~ "Progressive",
+    Patient %in% transient_response ~ "Transient_Response",
+    Patient %in% stable_disease ~ "Stable_Disease",
+    TRUE ~ NA_character_  # For patients not in any group
+  ))
+
+all_diversity$response  <- gsub("_", " ", all_diversity$response)
+all_diversity$Timepoint <- gsub("_", " ", all_diversity$Timepoint)
+all_diversity$Timepoint <- factor(all_diversity$Timepoint, levels= c(
+  "Prevaccine umi",
+  "Postvaccine umi",
+  "Postnivo umi",
+  "w16 umi",
+  "w40 umi"
+))
+
+p3 <- ggplot(all_diversity, aes(
+    x = Timepoint, y = Normalized_Shannon,
+    group = Patient, color = Patient
+  )) +
+  geom_line(alpha = 0.4) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(~response, scales="free_x") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_color_manual(values = patient_colors) +  # assign colors manually
+  labs(y = "Normalized Shannon")
+
+p3
+```
+
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,609 @@
+# PBMCs: Data Loading and Compilation
+
+```{r}
+.libPaths(c("/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.1", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.2", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.3", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/not_4.3", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.4"))
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+
+## Setting up Dataframe for visualization
+
+```{r}
+# rename columns to a same week+days format 
+
+rename_columns <- function(df) {
+  colnames(df) <- colnames(df) %>%
+    gsub("total_umi_PreL_W0", "Prevaccine_umi", .) %>%
+    gsub("total_umi_fraction_PreL_W0", "Prevaccine_umi_fraction", .) %>%
+    gsub("total_umi_L2_W14", "Postvaccine_umi", .) %>%
+    gsub("total_umi_fraction_L2_W14", "Postvaccine_umi_fraction", .) %>%
+    gsub("total_umi_L3_W22|total_umi_W24", "Postnivo_umi", .) %>%
+    gsub("total_umi_fraction_L3_W22|total_umi_fraction_W24", "Postnivo_umi_fraction", .) %>%
+    gsub("total_umi_w00", "Prevaccine_umi", .) %>%
+    gsub("total_umi_fraction_w00", "Prevaccine_umi_fraction", .) %>%
+    gsub("total_umi_w14", "Postvaccine_umi", .) %>%
+    gsub("total_umi_fraction_w14", "Postvaccine_umi_fraction", .) %>%
+    gsub("total_umi_w22", "Postnivo_umi", .) %>%
+    gsub("total_umi_fraction_w22", "Postnivo_umi_fraction", .) %>%
+    gsub("total_umi_W16", "w16_umi", .) %>%
+    gsub("total_umi_fraction_W16", "w16_umi_fraction", .) %>%
+    gsub("total_umi_LATE_W40", "w40_umi", .) %>%
+    gsub("total_umi_fraction_LATE_W40", "w40_umi_fraction", .) %>%
+    gsub("total_umi_Pre-LL", "Prevaccine_umi", .) %>%
+    gsub("total_umi_fraction_Pre-LL", "Prevaccine_umi_fraction", .) %>%
+    gsub("total_umi_L2", "Postvaccine_umi", .) %>%
+    gsub("total_umi_fraction_L2", "Postvaccine_umi_fraction", .) %>%
+    gsub("total_umi_L3", "Postnivo_umi", .) %>%
+    gsub("total_umi_fraction_L3", "Postnivo_umi_fraction", .) 
+  return(df)
+}
+
+
+# Calculating LOD 
+calculate_LOD <- function(vector) {
+  # Remove zero values before calculating min
+  min_nonzero <- min(vector[vector > 0], na.rm = TRUE)
+  
+  # Check if there are no nonzero values
+  if (is.infinite(min_nonzero)) {
+    return(NA)
+  }
+  # Calculate LOD
+  return(10^floor(log10(min_nonzero)))
+}
+
+merge_patient_data <- function(patient_id, base_path, timepoints, filename) {
+  
+  # subset for specific columns of interest
+  select_columns <- function(file_path) {
+    df <- read.csv(file_path, sep = "\t")
+    df <- df[,grep("total|aaSeqCDR3|vGene|jGene|aaImputedVDJSequence", colnames(df))]
+    df$clonotype_id <- paste(df$aaSeqCDR3, df$vGene, df$jGene, sep=";")
+    return(df)
+  }
+  # Helper function to select and rename columns
+  select_and_rename <- function(df, suffix) {
+    colnames(df) <- ifelse(colnames(df) != "clonotype_id",
+                           paste0(colnames(df), "_", suffix),
+                           colnames(df))
+    df <- df[, grep("total|clonotype_id", colnames(df))]
+    return(df)
+  }
+  
+  # Prepare file paths and suffixes
+  dataframes <- lapply(timepoints, function(tp) {
+    file_path <- file.path(base_path, paste0(filename, patient_id, "_", tp, ".TRB.tsv"))
+    df <- select_columns(file_path)
+    select_and_rename(df, tp)
+  })
+  
+  # Merge all dataframes
+  merged_df <- Reduce(function(x, y) merge(x, y, by = "clonotype_id", all = TRUE), dataframes)
+  
+  # Replace NA values with 0
+  merged_df[is.na(merged_df)] <- 0
+  
+  merged_df <- rename_columns(merged_df)
+  
+  merged_df$Prevaccine_LOD <- calculate_LOD(merged_df$Prevaccine_umi_fraction)
+  merged_df$Postvaccine_LOD <- calculate_LOD(merged_df$Postvaccine_umi_fraction)
+  if ("Postnivo_umi_fraction" %in% colnames(merged_df)) {  # Fix: Should check for Postnivo_umi_fraction
+    merged_df$Postnivo_LOD <- calculate_LOD(merged_df$Postnivo_umi_fraction)
+  }
+  if ("w40_umi_fraction" %in% colnames(merged_df)) {  # Fix: Should check for Postnivo_umi_fraction
+    merged_df$w40_LOD <- calculate_LOD(merged_df$w40_umi_fraction)
+  }
+  if (patient_id == "106") {  # Fix: Should check for Postnivo_umi_fraction
+    merged_df$w16_LOD <- calculate_LOD(merged_df$w16_umi_fraction)
+  }
+  
+  return(merged_df)
+}
+
+merge_patient_data_rerun <- function(patient_id, base_path, timepoints, filename) {
+  
+  select_columns <- function(file_path) {
+    df <- read.csv(file_path, sep = "\t")
+    if (grepl("PT113", file_path) & grepl("w00", file_path)) {
+      # Removing the first replicate of PT113, had repliacte outlier issue just for this sample.
+      print(file_path)
+      df <- df[,grep("total|aaSeqCDR3|vGene|jGene|aaImputedVDJSequence|uniqueUMICount", colnames(df))]
+      # Identify columns for replicates 2, 3, and 4 (assuming "total_" is part of the column name)
+      umi_columns <- grep("uniqueUMICount", colnames(df))
+      # Replace the 'total' column with the sum of UMIs from replicates 2, 3, and 4
+      df$total_umi <- rowSums(df[, umi_columns[2:4]], na.rm = TRUE)
+      df$total_umi_fraction <- df$total_umi/sum(df$total_umi)
+    }
+    df <- df[,grep("total|aaSeqCDR3|vGene|jGene|aaImputedVDJSequence", colnames(df))]
+    df$clonotype_id <- paste(df$aaSeqCDR3, df$vGene, df$jGene, sep=";")
+    return(df)
+  }
+  # Helper function to select and rename columns
+  select_and_rename <- function(df, suffix) {
+    colnames(df) <- ifelse(colnames(df) != "clonotype_id",
+                           paste0(colnames(df), "_", suffix),
+                           colnames(df))
+    df <- df[, grep("total|clonotype_id", colnames(df))]
+    return(df)
+  }
+  
+  # Prepare file paths and suffixes
+  dataframes <- lapply(timepoints, function(tp) {
+    file_path <- file.path(base_path, paste0(filename, patient_id, tp, ".TRB.tsv"))
+    df <- select_columns(file_path)
+    select_and_rename(df, tp)
+  })
+  
+  # Merge all dataframes
+  merged_df <- Reduce(function(x, y) merge(x, y, by = "clonotype_id", all = TRUE), dataframes)
+  
+  # Replace NA values with 0
+  merged_df[is.na(merged_df)] <- 0
+  merged_df <- rename_columns(merged_df)
+  merged_df$Prevaccine_LOD <- calculate_LOD(merged_df$Prevaccine_umi_fraction)
+  merged_df$Postvaccine_LOD <- calculate_LOD(merged_df$Postvaccine_umi_fraction)
+  merged_df$Postnivo_LOD <- calculate_LOD(merged_df$Postvaccine_umi_fraction)
+  
+  return(merged_df)
+}
+```
+
+## Generating dataframes for clone visualization / analysis
+
+```{r}
+
+# Inputting timepoints and mixcr output path to build list of clones dataframes. 
+
+#Sequenced in three different batches
+filename <- "Mac_TCR_PromethionRerun"
+filename_redo <- "Mac_Bulk_Redo"
+filename_extra <- "Mac_Francois_TCR"
+
+promethion_base_path <- "/jsimonlab/users/bshim/mixcr_OUTPUT/Mac_TCR_PromethionRerun_downsampled/modified"
+rerun_base_path <- "/jsimonlab/users/bshim/mixcr_OUTPUT/Mac_Bulk_Redo_downsampled/modified"
+extra_sample_path <- "/jsimonlab/users/bshim/mixcr_OUTPUT/Mac_Francois_TCR_downsampled/modified"
+
+
+# W24 was eliminated from PT106 timepoints due to lack of UMIs. 
+PT106_timepoints <- c("L2_W14", "PreL_W0", "W16")
+PT106_merged_df <- merge_patient_data("106", promethion_base_path, PT106_timepoints, filename)
+
+# Example for PT108, longest patient on trial
+PT108_timepoints <- c("L2_W14", "L3_W22", "LATE_W40", "PreL_W0")
+PT108_merged_df <- merge_patient_data("108", promethion_base_path, PT108_timepoints,filename)
+
+# Example for PT111
+PT111_timepoints <- c("L2_W14", "PreL_W0")
+PT111_merged_df <- merge_patient_data("111", promethion_base_path, PT111_timepoints,filename)
+
+PT113_timepoints <- c("w00", "w14", "w22")
+PT113_merged_df <- merge_patient_data_rerun("113",rerun_base_path, PT113_timepoints, filename_redo)
+
+PT114_timepoints <- c("L2_W14", "L3_W22", "PreL_W0")
+PT114_merged_df <- merge_patient_data("114", promethion_base_path, PT114_timepoints,filename)
+
+PT117_timepoints <- c("w00", "w14", "w22")
+PT117_merged_df <- merge_patient_data_rerun("117", rerun_base_path, PT117_timepoints,filename_redo)
+
+PT116_timepoints <- c("L2_W14", "L3_W22", "LATE_W40", "PreL_W0")
+PT116_merged_df <- merge_patient_data("116", promethion_base_path, PT116_timepoints,filename)
+
+PT118_timepoints <- c("L2_W14", "L3_W22", "PreL_W0")
+PT118_merged_df <- merge_patient_data("118", promethion_base_path, PT118_timepoints,filename)
+
+PT119_timepoints <- c("L2_W14", "L3_W22", "PreL_W0")
+PT119_merged_df <- merge_patient_data("119", promethion_base_path, PT119_timepoints,filename)
+
+PT122_timepoints <- c("L2", "L3", "Pre-LL")
+PT122_merged_df <- merge_patient_data_rerun("122", extra_sample_path, PT122_timepoints,filename_extra)
+
+saveRDS(PT106_merged_df, "./PT106_merged_df.rds")
+saveRDS(PT108_merged_df, "./PT108_merged_df.rds")
+saveRDS(PT111_merged_df, "./PT111_merged_df.rds")
+saveRDS(PT113_merged_df, "./PT113_merged_df.rds")
+saveRDS(PT114_merged_df, "./PT114_merged_df.rds")
+saveRDS(PT116_merged_df, "./PT116_merged_df.rds")
+saveRDS(PT117_merged_df, "./PT117_merged_df.rds")
+saveRDS(PT118_merged_df, "./PT118_merged_df.rds")
+saveRDS(PT119_merged_df, "./PT119_merged_df.rds")
+saveRDS(PT122_merged_df, "./PT122_merged_df.rds")
+
+```
+
+
+
+## UMI filter set at greater than 5
+
+```{r}
+
+
+#Filtering based on raw UMI counts and fold increase from the LOD
+count_significant_clones_in_cluster_LOD_Filter <- function(
+    results_df,
+    fold_change,
+    prevaccine_umi_threshold = 5,
+    postvaccine_umi_threshold = 5,
+    postnivo_umi_threshold = 5
+) {
+  # Get the lowest LOD value across all columns containing "LOD"
+  lod_cols <- grep("LOD", names(results_df), value = TRUE)
+  visualization_LOD <- min(results_df[, lod_cols], na.rm = TRUE)
+  
+  # Replace 0 values in all *_umi_fraction columns with visualization_LOD
+  fraction_cols <- grep("_umi_fraction$", names(results_df), value = TRUE)
+  results_df[, fraction_cols] <- lapply(results_df[, fraction_cols],
+                                        function(x) ifelse(x == 0, visualization_LOD, x))
+  
+  # Assign categories based on thresholds
+  has_Postnivo <- "Postnivo_umi_fraction" %in% colnames(results_df)
+  has_w40 <- "w40_umi_fraction" %in% colnames(results_df)
+  
+  if (has_Postnivo & has_w40) {
+    results_df <- results_df %>%
+      mutate(category = case_when(
+        (Postvaccine_umi_fraction >= (Postvaccine_LOD) * fold_change) &
+          (Postvaccine_umi > postvaccine_umi_threshold) ~ "Passing_Vax_Threshold",
+        (Postnivo_umi_fraction >= (Postnivo_LOD) * fold_change) &
+          (Postnivo_umi > postnivo_umi_threshold) ~ "Passing_Nivo_Threshold",
+        (Prevaccine_umi > prevaccine_umi_threshold) &
+          (Prevaccine_umi_fraction >= (Prevaccine_LOD) * fold_change) ~ "Passing_Pre_Threshold",
+        (w40_umi > postnivo_umi_threshold) &
+          (w40_umi_fraction >= (w40_LOD) * fold_change) ~ "Passing_Nivo_Threshold",
+        TRUE ~ "Do_Not_Pass"
+      ))
+    
+  } else if (has_Postnivo) {
+    results_df <- results_df %>%
+      mutate(category = case_when(
+        (Postvaccine_umi_fraction >= (Postvaccine_LOD) * fold_change) &
+          (Postvaccine_umi > postvaccine_umi_threshold) ~ "Passing_Vax_Threshold",  
+        (Postnivo_umi_fraction >= (Postnivo_LOD) * fold_change) &
+          (Postnivo_umi > postnivo_umi_threshold) ~ "Passing_Nivo_Threshold",
+        (Prevaccine_umi > prevaccine_umi_threshold) &
+          (Prevaccine_umi_fraction >= (Prevaccine_LOD) * fold_change) ~ "Passing_Pre_Threshold",
+        TRUE ~ "Do_Not_Pass"
+      ))
+    
+  } else if ("w16_umi_fraction" %in% colnames(results_df)) {
+    results_df <- results_df %>%
+      mutate(category = case_when(
+        (Postvaccine_umi_fraction >= (Postvaccine_LOD) * fold_change) &
+          (Postvaccine_umi > postvaccine_umi_threshold) ~ "Passing_Vax_Threshold",  
+        (Prevaccine_umi > prevaccine_umi_threshold) &
+          (Prevaccine_umi_fraction >= (Prevaccine_LOD) * fold_change) ~ "Passing_Pre_Threshold",
+        (w16_umi > postvaccine_umi_threshold) &
+          (w16_umi_fraction >= (w16_LOD) * fold_change) ~ "Passing_Vax_Threshold",
+        TRUE ~ "Do_Not_Pass"
+      ))
+    
+  } else {
+    results_df <- results_df %>%
+      mutate(category = case_when(
+        (Prevaccine_umi > prevaccine_umi_threshold) &
+          (Prevaccine_umi_fraction >= (Prevaccine_LOD) * fold_change) ~ "Passing_Pre_Threshold",
+        (Postvaccine_umi_fraction >= (Postvaccine_LOD) * fold_change) &
+          (Postvaccine_umi > postvaccine_umi_threshold) ~ "Passing_Vax_Threshold",  
+        TRUE ~ "Do_Not_Pass"
+      ))
+  }
+  
+  # 4. Store visualization LOD in the dataframe for later use in plotting
+  results_df$visualization_LOD <- visualization_LOD
+  
+  return(results_df)
+}
+
+```
+
+## Filtering Clones from the Visualization Dataframe.
+
+```{r}
+fold_change <- 5
+PT106_test <- count_significant_clones_in_cluster_LOD_Filter(PT106_merged_df, fold_change)
+
+PT108_test <- count_significant_clones_in_cluster_LOD_Filter(PT108_merged_df, fold_change)
+
+PT111_test <- count_significant_clones_in_cluster_LOD_Filter(PT111_merged_df, fold_change)
+
+PT113_test <- count_significant_clones_in_cluster_LOD_Filter(PT113_merged_df, fold_change)
+
+PT114_test <- count_significant_clones_in_cluster_LOD_Filter(PT114_merged_df, fold_change)
+
+PT116_test <- count_significant_clones_in_cluster_LOD_Filter(PT116_merged_df, fold_change)
+
+PT117_test <- count_significant_clones_in_cluster_LOD_Filter(PT117_merged_df, fold_change)
+
+PT118_test <- count_significant_clones_in_cluster_LOD_Filter(PT118_merged_df, fold_change)
+
+PT119_test <- count_significant_clones_in_cluster_LOD_Filter(PT119_merged_df, fold_change)
+
+PT122_test <- count_significant_clones_in_cluster_LOD_Filter(PT122_merged_df, fold_change)
+```
+
+## Fisher's Test Function
+
+```{r}
+fisher_test <- function(merged_df) {
+  w00_vs_w14 <- merged_df
+  results_w00_w14 <- w00_vs_w14 %>%
+    rowwise() %>%
+    mutate(
+      fisher_p_value_post_vax = {
+        # Contingency table for pre-vaccine vs post-vaccine
+        clone_w14 <- Postvaccine_umi
+        other_w14 <- sum(merged_df$Postvaccine_umi) - clone_w14
+        clone_w0 <- Prevaccine_umi
+        other_w0 <- sum(merged_df$Prevaccine_umi) - clone_w0
+        
+        # Create a contingency table
+        contingency_table <- matrix(c(clone_w0, other_w0, clone_w14, other_w14),
+                                    nrow = 2,
+                                    byrow = TRUE)
+        
+        # Perform Fisher's exact test
+        #boschloo(clone_w0, other_w0, clone_w14, other_w14,alternative="less")
+        fisher.test(contingency_table, alternative = "less")$p.value
+      }
+    )
+  
+  if ("Postnivo_umi" %in% colnames(merged_df)) {
+    w14_vs_w22 <- merged_df
+    results_w14_w22 <- w14_vs_w22 %>%
+      rowwise() %>%
+      mutate(
+      fisher_p_value_post_nivo = {
+        # Check if either total_umi_W24 or total_umi_L3_W22 exists
+        clone_w24 <- Postnivo_umi
+        other_w24 <- sum(merged_df$Postnivo_umi) - clone_w24
+        clone_w14 <- Postvaccine_umi
+        other_w14 <- sum(merged_df$Postvaccine_umi) - clone_w14
+        
+        # Create a contingency table
+        contingency_table <- matrix(c(clone_w14, other_w14, clone_w24, other_w24),
+                                    nrow = 2,
+                                    byrow = TRUE)
+        
+        # Perform Fisher's exact test
+        #boschloo(clone_w14, other_w14, clone_w24, other_w24,alternative="less")
+        fisher.test(contingency_table, alternative = "less")$p.value
+      }
+    )
+  }
+  
+  if ("Postnivo_umi" %in% colnames(merged_df)) { 
+    results_w00_w14$fisher_p_value_post_vax_adj <- p.adjust(results_w00_w14$fisher_p_value_post_vax, method = 'BY')
+    results_w00_w14$fisher_p_value_post_vax_adj_BH <- p.adjust(results_w00_w14$fisher_p_value_post_vax, method = 'BH')
+    results_w14_w22$fisher_p_value_post_nivo_adj <- p.adjust(results_w14_w22$fisher_p_value_post_nivo, method = 'BY')
+    results_w14_w22$fisher_p_value_post_nivo_adj_BH <- p.adjust(results_w14_w22$fisher_p_value_post_nivo, method = 'BH')
+    results_intermediate <- merge(merged_df, results_w00_w14[c("clonotype_id", "fisher_p_value_post_vax", "fisher_p_value_post_vax_adj", "fisher_p_value_post_vax_adj_BH")], by="clonotype_id", all = T)
+    results <- merge(results_intermediate, results_w14_w22[c("clonotype_id", "fisher_p_value_post_nivo", "fisher_p_value_post_nivo_adj", "fisher_p_value_post_nivo_adj_BH")], by="clonotype_id", all = T)
+  } else {
+    results_w00_w14$fisher_p_value_post_vax_adj <- p.adjust(results_w00_w14$fisher_p_value_post_vax, method = 'BY')
+    results_w00_w14$fisher_p_value_post_vax_adj_BH <- p.adjust(results_w00_w14$fisher_p_value_post_vax, method = 'BH')
+    results <- merge(merged_df, results_w00_w14[c("clonotype_id", "fisher_p_value_post_vax", "fisher_p_value_post_vax_adj", "fisher_p_value_post_vax_adj_BH")], by="clonotype_id", all = T)
+  }
+  results[is.na(results)] <- 1
+  return(results)
+}
+
+vaccine_def <- c("post_W22(booster+Nivo)_expanded", "post_W14(vaccine)_expanded", "Pre-Existing")
+
+label <- function(df) {
+  has_w40 <- "w40_umi_fraction" %in% colnames(df)
+  has_postnivo <- "Postnivo_umi_fraction" %in% colnames(df)
+  if (has_w40) {
+    return_df <- df %>%
+    mutate(new_category = case_when(
+        (fisher_p_value_post_vax_adj_BH < 0.05) & (Prevaccine_umi_fraction <= visualization_LOD) & (Postnivo_umi_fraction > Postnivo_LOD) & (w40_umi_fraction > w40_LOD) ~ "post_W14(vaccine)_expanded",
+        (fisher_p_value_post_nivo_adj_BH < 0.05) & (Prevaccine_umi_fraction <= visualization_LOD) & (w40_umi_fraction > w40_LOD) ~ "post_W22(booster+Nivo)_expanded",
+        TRUE ~ "non_expanded"
+      ))
+  } else if(has_postnivo) {
+      return_df <- df %>%
+    mutate(new_category = case_when(
+        (fisher_p_value_post_vax_adj_BH < 0.05) & (Prevaccine_umi_fraction <= visualization_LOD) & (Postnivo_umi_fraction > Postnivo_LOD)  ~ "post_W14(vaccine)_expanded",
+      (fisher_p_value_post_nivo_adj_BH < 0.05) & (Prevaccine_umi_fraction <= visualization_LOD) ~ "post_W22(booster+Nivo)_expanded",
+        TRUE ~ "non_expanded"
+      ))
+  }
+  else {
+    return_df <- df %>%
+    mutate(new_category = case_when(
+        (fisher_p_value_post_vax_adj_BH < 0.05) &
+          (Prevaccine_umi_fraction <= visualization_LOD) ~ "post_W14(vaccine)_expanded",
+        TRUE ~ "non_expanded"
+      ))
+  }
+  
+  return(return_df)
+}
+```
+
+## Applying Fisher's Test on the Filtered Set of Clones
+
+```{r}
+## Passing_Nivo_Threshold
+## Passing_Vax_Threshold 
+## Passing_Pre_Threshold
+vaccine_def <- c("Passing_Nivo_Threshold", "Passing_Vax_Threshold", "Passing_Pre_Threshold")
+
+##printing the number of clones 
+
+print(paste("Prefilter:", nrow(PT106_test)))
+PT106_test_fisher <- PT106_test[PT106_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT106_test_fisher)))
+PT106_test_fisher <- fisher_test(PT106_test_fisher)
+PT106_test_fisher_categorized <- label(PT106_test_fisher)
+PT106_test_fisher_categorized$patient_id <- rep("PT106", nrow(PT106_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT108_test)))
+PT108_test_fisher <- PT108_test[PT108_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT108_test_fisher)))
+PT108_test_fisher <- fisher_test(PT108_test_fisher)
+PT108_test_fisher_categorized <- label(PT108_test_fisher)
+PT108_test_fisher_categorized$patient_id <- rep("PT108", nrow(PT108_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT111_test)))
+PT111_test_fisher <- PT111_test[PT111_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT111_test_fisher)))
+PT111_test_fisher <- fisher_test(PT111_test_fisher)
+PT111_test_fisher_categorized <- label(PT111_test_fisher)
+PT111_test_fisher_categorized$patient_id <- rep("PT111", nrow(PT111_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT113_test)))
+PT113_test_fisher <- PT113_test[PT113_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT113_test_fisher)))
+PT113_test_fisher <- fisher_test(PT113_test_fisher)
+PT113_test_fisher_categorized <- label(PT113_test_fisher)
+PT113_test_fisher_categorized$patient_id <- rep("PT113", nrow(PT113_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT114_test)))
+PT114_test_fisher <- PT114_test[PT114_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT114_test_fisher)))
+PT114_test_fisher <- fisher_test(PT114_test_fisher)
+PT114_test_fisher_categorized <- label(PT114_test_fisher)
+PT114_test_fisher_categorized$patient_id <- rep("PT114", nrow(PT114_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT116_test)))
+PT116_test_fisher <- PT116_test[PT116_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT116_test_fisher)))
+PT116_test_fisher <- fisher_test(PT116_test_fisher)
+PT116_test_fisher_categorized <- label(PT116_test_fisher)
+PT116_test_fisher_categorized$patient_id <- rep("PT116", nrow(PT116_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT117_test)))
+PT117_test_fisher <- PT117_test[PT117_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT117_test_fisher)))
+PT117_test_fisher <- fisher_test(PT117_test_fisher)
+PT117_test_fisher_categorized <- label(PT117_test_fisher)
+PT117_test_fisher_categorized$patient_id <- rep("PT117", nrow(PT117_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT118_test)))
+PT118_test_fisher <- PT118_test[PT118_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT118_test_fisher)))
+PT118_test_fisher <- fisher_test(PT118_test_fisher)
+PT118_test_fisher_categorized <- label(PT118_test_fisher)
+PT118_test_fisher_categorized$patient_id <- rep("PT118", nrow(PT118_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT119_test)))
+PT119_test_fisher <- PT119_test[PT119_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT119_test_fisher)))
+PT119_test_fisher <- fisher_test(PT119_test_fisher)
+PT119_test_fisher_categorized <- label(PT119_test_fisher)
+PT119_test_fisher_categorized$patient_id <- rep("PT119", nrow(PT119_test_fisher_categorized))
+
+print(paste("Prefilter:", nrow(PT122_test)))
+PT122_test_fisher <- PT122_test[PT122_test$category %in% vaccine_def,]
+print(paste("Postfilter:", nrow(PT122_test_fisher)))
+PT122_test_fisher <- fisher_test(PT122_test_fisher)
+PT122_test_fisher_categorized <- label(PT122_test_fisher)
+PT122_test_fisher_categorized$patient_id <- rep("PT122", nrow(PT122_test_fisher_categorized))
+```
+
+## Assign Response Groups
+
+
+```{r}
+# Define patient groups
+progressive <- c("PT111", "PT114", "PT117", "PT113")
+transient_response <- c("PT106", "PT108", "PT116")
+stable_disease <- c("PT118", "PT119", "PT122")
+
+# Function to assign response_group based on patient_id
+assign_response_group <- function(df) {
+  df <- df %>%
+    mutate(across(contains("umi_fraction"), ~ . * 100),
+           across(contains("LOD"), ~ . * 100))
+  df %>%
+    mutate(response = case_when(
+      patient_id %in% progressive ~ "Progressive",
+      patient_id %in% transient_response ~ "Transient_Response",
+      patient_id %in% stable_disease ~ "Stable_Disease",
+      TRUE ~ NA_character_
+    ))
+}
+
+# Apply to each dataframe
+PT106_test_fisher_categorized <- assign_response_group(PT106_test_fisher_categorized)
+PT108_test_fisher_categorized <- assign_response_group(PT108_test_fisher_categorized)
+PT111_test_fisher_categorized <- assign_response_group(PT111_test_fisher_categorized)
+PT113_test_fisher_categorized <- assign_response_group(PT113_test_fisher_categorized)
+PT114_test_fisher_categorized <- assign_response_group(PT114_test_fisher_categorized)
+PT116_test_fisher_categorized <- assign_response_group(PT116_test_fisher_categorized)
+PT117_test_fisher_categorized <- assign_response_group(PT117_test_fisher_categorized)
+PT118_test_fisher_categorized <- assign_response_group(PT118_test_fisher_categorized)
+PT119_test_fisher_categorized <- assign_response_group(PT119_test_fisher_categorized)
+PT122_test_fisher_categorized <- assign_response_group(PT122_test_fisher_categorized)
+```
+
+## Number of Postvax and Postnivo Clones
+
+```{r}
+
+table(PT106_test_fisher_categorized$new_category)
+table(PT108_test_fisher_categorized$new_category)
+table(PT111_test_fisher_categorized$new_category)
+table(PT113_test_fisher_categorized$new_category)
+table(PT114_test_fisher_categorized$new_category)
+table(PT116_test_fisher_categorized$new_category)
+table(PT117_test_fisher_categorized$new_category)
+table(PT118_test_fisher_categorized$new_category)
+table(PT119_test_fisher_categorized$new_category)
+table(PT122_test_fisher_categorized$new_category)
+
+
+patient_list <- list(
+  PT106_test_fisher_categorized,
+  PT108_test_fisher_categorized,
+  PT111_test_fisher_categorized,
+  PT113_test_fisher_categorized,
+  PT114_test_fisher_categorized,
+  PT116_test_fisher_categorized,
+  PT117_test_fisher_categorized,
+  PT118_test_fisher_categorized,
+  PT119_test_fisher_categorized,
+  PT122_test_fisher_categorized
+)
+category_counts <- lapply(patient_list, function(df) table(df$new_category))
+
+get_count <- function(count_table, category) {
+  if (category %in% names(count_table)) {
+    return(count_table[[category]])
+  } else {
+    return(NA)   # if category not present, treat count as 0
+  }
+}
+
+postW14_counts <- sapply(category_counts, get_count, 
+                         category = "post_W14(vaccine)_expanded")
+
+postW22_counts <- sapply(category_counts, get_count, 
+                         category = "post_W22(booster+Nivo)_expanded")
+
+cat("Median post_W14(vaccine)_expanded =", median(postW14_counts, na.rm = TRUE), "\n")
+cat("Median post_W22(booster+Nivo)_expanded =", median(postW22_counts, na.rm=TRUE), "\n")
+
+
+```
+
+
+
+```{r}
+saveRDS(PT106_test_fisher_categorized, "./PT106_test_fisher_categorized.rds")
+saveRDS(PT108_test_fisher_categorized, "./PT108_test_fisher_categorized.rds")
+saveRDS(PT111_test_fisher_categorized, "./PT111_test_fisher_categorized.rds")
+saveRDS(PT113_test_fisher_categorized, "./PT113_test_fisher_categorized.rds")
+saveRDS(PT114_test_fisher_categorized, "./PT114_test_fisher_categorized.rds")
+saveRDS(PT116_test_fisher_categorized, "./PT116_test_fisher_categorized.rds")
+saveRDS(PT117_test_fisher_categorized, "./PT117_test_fisher_categorized.rds")
+saveRDS(PT118_test_fisher_categorized, "./PT118_test_fisher_categorized.rds")
+saveRDS(PT119_test_fisher_categorized, "./PT119_test_fisher_categorized.rds")
+saveRDS(PT122_test_fisher_categorized, "./PT122_test_fisher_categorized.rds")
+```
+
+
+```{r}
+sessionInfo()
+```

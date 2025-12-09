@@ -1,0 +1,246 @@
+# PBMCs: Kmeans Clustering Analysis
+
+## Package Loading Set Up
+
+```{r}
+.libPaths(c("/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.1", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.2", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.3", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/not_4.3", "/homes8/bohoon/R/x86_64-pc-linux-gnu-library/4.4"))
+library(dplyr)
+library(purrr)
+library(tidyverse)
+```
+
+## Loading in Unfiltered Dataframe
+
+```{r}
+
+PT106_merged_df <- readRDS("./PT106_merged_df.rds")
+PT108_merged_df <- readRDS("./PT108_merged_df.rds")
+PT111_merged_df <- readRDS("./PT111_merged_df.rds")
+PT113_merged_df <- readRDS("./PT113_merged_df.rds")
+PT114_merged_df <- readRDS( "./PT114_merged_df.rds")
+PT116_merged_df <- readRDS("./PT116_merged_df.rds")
+PT117_merged_df <- readRDS("./PT117_merged_df.rds")
+PT118_merged_df <- readRDS("./PT118_merged_df.rds")
+PT119_merged_df <- readRDS("./PT119_merged_df.rds")
+PT122_merged_df <- readRDS("./PT122_merged_df.rds")
+
+
+patient_dfs_postnivo <- list(
+  PT108 = PT108_merged_df,
+  PT113 = PT113_merged_df,
+  PT114 = PT114_merged_df, 
+  PT116 = PT116_merged_df,
+  PT117 = PT117_merged_df, 
+  PT118 = PT118_merged_df, 
+  PT119 = PT119_merged_df,
+  PT122 = PT122_merged_df
+)
+
+
+
+# Find common columns across all dataframes (trying to merge across dataframes)
+common_cols_postnivo <- Reduce(intersect, lapply(patient_dfs_postnivo, colnames))
+# Subset all dataframes to only those columns
+patient_dfs_postnivo <- lapply(patient_dfs_postnivo, function(df) df[,common_cols_postnivo])
+
+# Combine all dataframes into one list, adding patient ID
+combined_df_postnivo <- bind_rows(
+  lapply(names(patient_dfs_postnivo), function(pid) {
+    df <- patient_dfs_postnivo[[pid]]
+    df$patient_id <- pid
+    return(df)
+  })
+)
+
+df_matrix_postnivo <- combined_df_postnivo %>%
+  mutate(clone_label = paste(clonotype_id, patient_id, sep = "_")) %>%
+  dplyr::select(clone_label, Prevaccine_umi_fraction, Postvaccine_umi_fraction, Postnivo_umi_fraction)
+
+umi_matrix_postnivo <- as.matrix(df_matrix_postnivo[, -1])
+rownames(umi_matrix_postnivo) <- df_matrix_postnivo$clone_label
+```
+
+## Running Kmeans Analysis 
+
+```{r}
+
+## Running Kmeans Analysis 
+set.seed(6)
+
+sds_nivo <- apply(umi_matrix_postnivo, 1, sd)
+filtered_postnivo <- umi_matrix_postnivo[sds_nivo > 0,]
+
+scaled_umi_matrix_postnivo <- t(scale(t(filtered_postnivo)))
+km_postnivo <- kmeans(scaled_umi_matrix_postnivo, centers = 5, iter.max = 50)
+km_postnivo$centers
+
+
+```
+
+## Plotting variances based on number of Ks
+
+```{r}
+# Analogous to Elbow Method for finding the optimal number of clusters
+set.seed(4)
+# plot k = 2 to k = 15.
+k.max <- 15
+data <- umi_matrix_postnivo
+wss <- sapply(1:k.max, 
+              function(k){kmeans(data, k, iter.max = 50)$tot.withinss})
+plot(1:k.max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+```
+
+## Plotting the centroids and the SD from the centroids
+
+```{r}
+# Get cluster assignment for each row
+cluster_assignments <- km_postnivo$cluster
+scaled_mat <- as.data.frame(scaled_umi_matrix_postnivo)
+scaled_mat$cluster <- factor(cluster_assignments)
+scaled_mat$id <- rownames(scaled_mat)
+
+# Reshape to long format
+long_scaled <- scaled_mat %>%
+  pivot_longer(cols = c(Prevaccine_umi_fraction, Postvaccine_umi_fraction, Postnivo_umi_fraction),
+               names_to = "timepoint", values_to = "value")
+
+centroid_long <- km_postnivo$centers %>%
+  as.data.frame() %>%
+  mutate(cluster = factor(rownames(.))) %>%
+  pivot_longer(
+    cols = -cluster,  # pivot all columns except 'cluster'
+    names_to = "timepoint",
+    values_to = "centroid_value"
+  )
+
+# Join data to get centroid per cluster + timepoint
+joined <- long_scaled %>%
+  left_join(centroid_long, by = c("cluster", "timepoint")) %>%
+  mutate(sq_diff = (value - centroid_value)^2)
+
+# Calculate SD around the centroid (not the mean)
+summary_stats <- joined %>%
+  group_by(cluster, timepoint, centroid_value) %>%
+  summarise(
+    sd = sqrt(mean(sq_diff)),
+    lower = centroid_value - sd,
+    upper = centroid_value + sd,
+    .groups = "drop"
+  )
+summary_stats <- summary_stats %>%
+    distinct(cluster, timepoint, .keep_all = TRUE)
+```
+
+## Plotting means of each cluster with error bar
+
+```{r}
+summary_stats$timepoint <- factor(summary_stats$timepoint, levels=c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction"))
+ggplot(summary_stats, aes(x = timepoint, y = centroid_value, group = cluster, color = cluster, fill = cluster)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, linetype = 0) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(y = "Scaled frequency", x = "Timepoint", title = "Cluster Centroids with SD")
+```
+
+## Calculating scaled frequency means of each cluster divided by response groups
+
+```{r}
+#faceting this by patient / response group
+cluster_assignments <- km_postnivo$cluster
+
+#can generate dataframe with both the scaled and the raw frequencies. 
+
+scaled_mat <- as.data.frame(scaled_umi_matrix_postnivo)
+scaled_mat$cluster <- factor(cluster_assignments)
+scaled_mat$id <- rownames(scaled_mat)
+scaled_mat$patient <- str_extract(scaled_mat$id, "PT\\d+")
+
+
+# Example patient groups
+progressive <- c("PT111", "PT114", "PT117", "PT113")
+transient_response <- c("PT106", "PT108", "PT116")
+stable_disease <- c("PT118", "PT119", "PT122")
+
+# Add response column
+scaled_mat <- scaled_mat %>%
+  mutate(response = case_when(
+    patient %in% progressive ~ "Progressive",
+    patient %in% transient_response ~ "Transient_Response",
+    patient %in% stable_disease ~ "Stable_Disease",
+    TRUE ~ NA_character_  # For patients not in any group
+  ))
+
+
+# Reshape
+long_scaled <- scaled_mat %>%
+  pivot_longer(cols = c(Prevaccine_umi_fraction, Postvaccine_umi_fraction, Postnivo_umi_fraction),
+               names_to = "timepoint", values_to = "value")
+
+# generating summary stats
+summary_stats <- long_scaled %>%
+  group_by(cluster,timepoint, response) %>%
+  summarise(
+    mean_val = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    count = n(),
+    lower = mean_val - sd,
+    upper = mean_val + sd,
+    .groups = "drop"
+  )
+
+
+summary_stats <- summary_stats %>%
+    distinct(cluster,timepoint,response, .keep_all = TRUE)
+```
+
+## Plotting the mean frequency within each cluster with its SE
+
+```{r, fig.height=12, fig.width=22}
+summary_stats$timepoint <- factor(summary_stats$timepoint, levels=c("Prevaccine_umi_fraction", "Postvaccine_umi_fraction", "Postnivo_umi_fraction"))
+
+label_data <- summary_stats[summary_stats$timepoint == "Postnivo_umi_fraction", ]
+
+ggplot(summary_stats, aes(x = timepoint, y = mean_val, group = cluster, color = cluster)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = cluster), alpha = 0.2, linetype = 0) +
+  ggrepel::geom_text_repel(
+    data = label_data, aes(label = paste0("n=", count), color = cluster),, 
+    size = 3, show.legend = FALSE, 
+    direction = "y", box.padding = 0.0005,
+    label.padding = 0.0005, nudge_x = 0.2
+  ) +
+  scale_color_manual(
+    values = c(
+      "1" = "#E41A1C",  # red
+      "2" = "#B3B300",  # olive/yellow
+      "3" = "#00B2B2",  # teal
+      "4" = "#4DA6FF",  # light blue
+      "5" = "#FF99FF"   # pink
+    )
+  ) +
+  scale_fill_manual(
+    values = c(
+      "1" = "#E41A1C",
+      "2" = "#B3B300",
+      "3" = "#00B2B2",
+      "4" = "#4DA6FF",
+      "5" = "#FF99FF"
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(
+    y = "Raw Frequency", 
+    x = "Timepoint", 
+    title = "Cluster Mean for Denovo Clones Separated by Response"
+  ) + facet_wrap(~response)
+```
+
+
+```{r, fig.height=12, fig.width=22}
+sessionInfo()
+```
